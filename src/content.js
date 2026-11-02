@@ -132,6 +132,16 @@
     const limitMatch = rowText.match(/l[ií]mite\s*(\d+)/i);
     if (limitMatch) out.limit = parseInt(limitMatch[1], 10);
 
+    // Variante elegida (color y talla). El precio cambia segun la variante, asi
+    // que se guarda para no confundir dos filas del mismo producto.
+    if (!out.variant) {
+      const spec = [...row.querySelectorAll('div,span')].find((el) => {
+        const t = norm(el.textContent);
+        return t.length > 3 && t.length < 90 && /(talla|tamaño de etiqueta|color)\s*:/i.test(t) && !/\$/.test(t);
+      });
+      if (spec) out.variant = norm(spec.textContent);
+    }
+
     const promo = findPromoLine(row);
     if (promo) {
       out.promoNode = promo;
@@ -478,6 +488,7 @@
   function cleanName(text) {
     return norm(text)
       .replace(/^imagen del art[ií]culo\s*/i, '')
+      .replace(/^selecci[oó]n destacada\s*/i, '')
       .replace(/^(casi agotado(\(s\))?|agotado|nuevo|choice|mega oferta|black friday)\s*/gi, '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -489,25 +500,32 @@
 
   // Guarda el ultimo carrito calculado para poder corregir los paneles de
   // producto en otras paginas (portada, busqueda, ficha).
-  function persistSnapshot(result) {
+  function persistRows(rows) {
+    if (!rows || !rows.length) return;
+    const sig = JSON.stringify(rows.map((r) => [r.goodsId, r.qty, r.net]));
+    if (state.snapSig === sig) return;
+    state.snapSig = sig;
+    state.snapshot = rows;
     try {
-      const rows = result.allocation.map((a) => ({
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ [SNAPSHOT_KEY]: { ts: Date.now(), rows } });
+      }
+    } catch (err) {
+      /* sin contexto de extension (pruebas por inyeccion manual) */
+    }
+  }
+
+  function persistSnapshot(result) {
+    persistRows(
+      result.allocation.map((a) => ({
         goodsId: String(a.row.goodsId || ''),
         name: a.row.name,
         qty: a.row.qty,
         net: a.net,
         units: unitCents(a),
-      }));
-      const sig = JSON.stringify(rows.map((r) => [r.goodsId, r.qty, r.net]));
-      if (state.snapSig === sig) return;
-      state.snapSig = sig;
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.set({ [SNAPSHOT_KEY]: { ts: Date.now(), rows } });
-      }
-      state.snapshot = rows;
-    } catch (err) {
-      /* sin contexto de extension (pruebas por inyeccion manual) */
-    }
+        variant: a.row.variant || '',
+      }))
+    );
   }
 
   function loadSnapshot() {
@@ -541,8 +559,45 @@
     return state.snapshot || [];
   }
 
+  // El precio cambia segun la variante (modelo, color, talla). Se comparan las
+  // etiquetas que aparecen en ambos lados y se descarta la fila cuando chocan.
+  function sizesIn(text) {
+    const out = [];
+    const re = /(?:talla|tamaño de etiqueta|tamaño|size)[^:]{0,14}:\s*([^\s|/]{1,14})/gi;
+    let m;
+    while ((m = re.exec(text))) out.push(m[1].toLowerCase());
+    return out;
+  }
+
+  function colorIn(text) {
+    const m = norm(text).match(/color\s*:\s*([^|]{2,50})/i);
+    return m ? m[1].toLowerCase().trim() : '';
+  }
+
+  function variantFits(rowVariant, panelText) {
+    if (!rowVariant) return true;
+
+    const rowSizes = sizesIn(rowVariant);
+    const panelSizes = sizesIn(panelText);
+    if (rowSizes.length && panelSizes.length) {
+      const numeric = (s) => /^\d+$/.test(s);
+      const comparable = rowSizes.every(numeric) === panelSizes.every(numeric);
+      if (comparable && !rowSizes.some((s) => panelSizes.includes(s))) return false;
+    }
+
+    const rowColor = colorIn(rowVariant);
+    const panelColor = colorIn(panelText);
+    if (rowColor && panelColor && !rowColor.includes(panelColor) && !panelColor.includes(rowColor)) {
+      return false;
+    }
+    return true;
+  }
+
   function matchCandidate(root, titleText) {
-    const list = candidates();
+    const all = candidates();
+    if (!all.length) return null;
+    const panelText = norm(root.innerText || root.textContent || '');
+    const list = all.filter((c) => variantFits(c.variant, panelText));
     if (!list.length) return null;
 
     const hrefs = [...root.querySelectorAll('a[href*="goods_id="]')].map((a) => a.getAttribute('href') || '');
@@ -640,30 +695,110 @@
   // por unidad como si fuera el precio real. Se corrige con el ultimo carrito
   // conocido.
   function cleanMiniCart() {
-    for (const row of document.querySelectorAll('div._3nm8E1o6')) {
-      const price = row.querySelector('div.QYQCxZyT');
-      if (!price || price.getAttribute('data-temu-ci-mini') === '1') continue;
-      const media = row.querySelector('[aria-label*="imagen del"]');
-      const title = media ? media.getAttribute('aria-label') || '' : '';
+    for (const media of document.querySelectorAll('[aria-label*="imagen del art"]')) {
+      const title = media.getAttribute('aria-label') || '';
+
+      let row = media;
+      for (let i = 0; i < 4 && row.parentElement; i += 1) {
+        row = row.parentElement;
+        if (/\$\s?\d/.test(row.innerText || '')) break;
+      }
+      if (!row || row.getAttribute('data-temu-ci-mini-row') === '1') continue;
+
+      const price = [...row.querySelectorAll('div,span')].find(
+        (el) =>
+          !el.children.length &&
+          /^\$?\s*\d{1,4}[.,]\d{2}$/.test(norm(el.innerText || el.textContent)) &&
+          el.getAttribute('data-temu-ci-mini') !== '1'
+      );
+      if (!price || !price.parentElement) continue;
+
+      const box = price.parentElement;
+      if (box.getAttribute('data-temu-ci-mini') === '1') continue;
       const entry = matchCandidate(row, title);
       if (!entry) continue;
 
       const avg = entry.qty > 1 ? entry.net / entry.qty : entry.net;
-      price.textContent = '';
-      price.setAttribute('data-temu-ci-mini', '1');
-      price.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:1px;text-decoration:none';
+      box.textContent = '';
+      box.setAttribute('data-temu-ci-mini', '1');
+      row.setAttribute('data-temu-ci-mini-row', '1');
+      box.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:1px;text-decoration:none';
 
       const top = document.createElement('div');
       top.textContent = entry.qty > 1 ? `${money(avg)} × ${entry.qty}` : money(entry.net);
       top.style.cssText = 'color:#fb7701;font-weight:700;font-size:13px;line-height:1.3;text-decoration:none';
-      price.append(top);
+      box.append(top);
 
       if (entry.qty > 1) {
         const tot = document.createElement('div');
         tot.textContent = `total: ${money(entry.net)}`;
         tot.style.cssText = 'color:#111;font-size:11px;font-weight:600;line-height:1.3;text-decoration:none';
-        price.append(tot);
+        box.append(tot);
       }
+    }
+  }
+
+  // Tarjetas de listado y portada: si el producto esta en el carrito se muestra
+  // el precio real que paga el usuario, no el precio de vitrina.
+  function paintCards() {
+    const list = (candidates() || []).filter((r) => r && r.name && r.net);
+    if (!list.length) return;
+    const keys = list.map((r) => ({ row: r, key: cleanName(r.name) }));
+
+    for (const link of document.querySelectorAll('a[href^="/ec/"], a[href*="goods.html"]')) {
+      let card = link;
+      let leaf = null;
+      for (let i = 0; i < 6 && card.parentElement; i += 1) {
+        card = card.parentElement;
+        if (card.querySelectorAll('a[href^="/ec/"], a[href*="goods.html"]').length > 1) break;
+        leaf = [...card.querySelectorAll('div,span')].find(
+          (el) => !el.children.length && /^\$?\s*\d{1,4}[.,]\d{2}$/.test(norm(el.textContent))
+        );
+        if (leaf) break;
+      }
+      if (!leaf || leaf.getAttribute('data-temu-ci-card') === '1') continue;
+      if (!leaf.parentElement) continue;
+
+      const titles = [...card.querySelectorAll('div,span')].filter((el) => {
+        const t = norm(el.textContent);
+        return (
+          t.length >= 20 &&
+          t.length <= 320 &&
+          !/\$/.test(t) &&
+          el.children.length <= 3 &&
+          !/termina en|ventas|env[ií]o|anuncio|vendedor|descuento|compra/i.test(t)
+        );
+      });
+      const pure = titles.filter((el) => !el.children.length);
+      const titleEl = (pure.length ? pure : titles).reduce(
+        (a, b) => (!a || b.textContent.length > a.textContent.length ? b : a),
+        null
+      );
+      if (!titleEl) continue;
+
+      const key = cleanName(titleEl.textContent);
+      if (key.length < 12) continue;
+      const hits = keys.filter(
+        (k) => k.key.slice(0, 20) === key.slice(0, 20) || k.key.startsWith(key.slice(0, 20))
+      );
+      if (hits.length !== 1) continue;
+
+      const row = hits[0].row;
+      const avg = row.qty > 1 ? row.net / row.qty : row.net;
+      const box = leaf.parentElement;
+      if (box.getAttribute('data-temu-ci-card') === '1') continue;
+      box.setAttribute('data-temu-ci-card', '1');
+      box.textContent = '';
+
+      const price = document.createElement('span');
+      price.textContent = money(avg);
+      price.style.cssText = 'color:#fb7701;font-weight:700';
+      box.append(price);
+
+      const note = document.createElement('span');
+      note.textContent = ' en tu carrito';
+      note.style.cssText = 'color:#888;font-size:11px;font-weight:400;margin-left:3px';
+      box.append(note);
     }
   }
 
@@ -671,20 +806,23 @@
   function run() {
     state.timer = null;
     try {
+      const onCartPage = /shopping_cart/.test(location.pathname + location.search);
       const result = compute();
       state.last = result;
       if (!result.allocation.length) {
         cleanListPage();
-        cleanMiniCart();
+        if (!onCartPage) cleanMiniCart();
         cleanQuickView();
+        paintCards();
         return;
       }
       for (const entry of result.allocation) paintPrice(entry);
       cleanNoise(result.allocation);
       paintSummary(result);
       persistSnapshot(result);
-      cleanMiniCart();
+      if (!onCartPage) cleanMiniCart();
       cleanQuickView();
+      paintCards();
     } catch (err) {
       console.error('[Temu Cart Insight]', err);
     }
