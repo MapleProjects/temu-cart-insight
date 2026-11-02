@@ -25,6 +25,7 @@
     apiIndex: new Map(),   // goods_id -> datos de la API
     memo: new Map(),       // goods_id -> datos ya leidos del DOM
     priceSlot: new Map(),  // goods_id -> nodo donde vive el precio mostrado
+    prices: new Map(),     // goods_id -> precios originales leidos del DOM
     hidden: new WeakSet(),
     timer: null
   };
@@ -120,6 +121,16 @@
     return candidates[0] || null;
   }
 
+  // Texto de la fila sin los nodos que inyecta la extension, para poder releer
+  // los precios originales de Temu cuando algo cambia.
+  function rowTextClean(row) {
+    const clone = row.cloneNode(true);
+    [...clone.querySelectorAll('*')].forEach((node) => {
+      if ([...node.attributes].some((a) => a.name.startsWith('data-temu-ci'))) node.remove();
+    });
+    return norm(clone.innerText || clone.textContent);
+  }
+
   function readRow(row, goodsId) {
     const memo = state.memo.get(goodsId) || {};
     const api = state.apiIndex.get(goodsId) || {};
@@ -142,32 +153,41 @@
       if (spec) out.variant = norm(spec.textContent);
     }
 
-    const promo = findPromoLine(row);
-    if (promo) {
-      out.promoNode = promo;
-      const m = norm(promo.textContent).match(/(?:promociones a|promos)\s*(\$?\s?[\d.,]+)/i);
-      const value = m ? parseAmount(m[1]) : null;
-      if (value != null) out.baseUnit = value;
+    // Precios: se leen del texto original de la fila, sin los nodos que ya
+    // pintamos nosotros, y se guardan para no volver a depender del DOM
+    // repintado. Si cambia la cantidad se vuelve a leer.
+    const prev = state.prices.get(goodsId);
+    if (!prev || prev.qty !== out.qty) {
+      const clean = rowTextClean(row);
+      const baseMatch = clean.match(/promociones a\s*\$?\s*([\d.,]+)/i);
+      const shownMatch = clean.match(/([\d.,]+)\s*\$?\s*tras aplicar/i) || clean.match(/\$\s*([\d.,]+)\s*tras aplicar/i);
+      const pairMatch = clean.match(/([\d.,]+)\s*\$?\s*([\d.,]+)\s*\$?\s*tras aplicar/i);
+
+      const priced = {
+        qty: out.qty,
+        base: baseMatch ? parseAmount(baseMatch[1]) : null,
+        shown: shownMatch ? parseAmount(shownMatch[1]) : null,
+        strike: pairMatch ? parseAmount(pairMatch[1]) : null,
+      };
+      state.prices.set(goodsId, priced);
+      if (priced.base != null) out.baseUnit = priced.base;
+      if (priced.shown != null) out.shown = priced.shown;
+      if (priced.strike != null) out.strike = priced.strike;
+    } else {
+      out.baseUnit = prev.base != null ? prev.base : out.baseUnit;
+      out.shown = prev.shown != null ? prev.shown : out.shown;
+      out.strike = prev.strike != null ? prev.strike : out.strike;
     }
 
-    // Precio mostrado (naranja) solo la primera vez: despues lo reemplazamos.
+    // Nodo del precio mostrado: se pinta encima, sin tocar la linea de promos.
     if (!state.priceSlot.get(goodsId)) {
-      const prev = promo && promo.previousElementSibling;
-      if (prev && priceLike(norm(prev.textContent)) && norm(prev.textContent).length < 24) {
-        state.priceSlot.set(goodsId, prev);
-        if (out.shown == null) out.shown = parseAmount(norm(prev.textContent));
-      } else {
-        const leaves = [...row.querySelectorAll('span,div,b,strong')].filter((el) => !el.children.length && norm(el.textContent));
-        let strike = null;
-        const orange = [];
-        for (const el of leaves) {
-          const style = getComputedStyle(el);
-          const text = norm(el.textContent);
-          if (!priceLike(text)) continue;
-          if (style.textDecorationLine.includes('line-through') && strike == null) strike = parseAmount(text);
-          if (style.color === ORANGE) orange.push(el);
-        }
-        if (strike != null) out.strike = strike;
+      const promo = findPromoLine(row);
+      const before = promo && promo.previousElementSibling;
+      if (before && norm(before.textContent).length < 30) state.priceSlot.set(goodsId, before);
+      else {
+        const orange = [...row.querySelectorAll('span,div,b,strong')].filter(
+          (el) => !el.children.length && getComputedStyle(el).color === ORANGE
+        );
         if (orange.length) state.priceSlot.set(goodsId, orange[0].parentElement || orange[0]);
       }
     }
@@ -256,7 +276,9 @@
 
   // --------------------------------------------------------------- calculo
   function compute() {
-    const rows = domRows().filter((r) => r.selected && r.qty > 0);
+    // Todas las filas con cantidad, esten marcadas o no: el precio unitario
+    // real no depende de la seleccion del carrito.
+    const rows = domRows().filter((r) => r.qty > 0);
     const panel = parsePanel() || {};
     const withBase = rows.filter((r) => r.baseUnit != null);
     const sumBase = withBase.reduce((acc, r) => acc + r.baseUnit * r.qty, 0);
@@ -269,14 +291,23 @@
 
     const allocation = [];
     const denom = sumBase || 1;
+    // Sin nada seleccionado el panel no trae descuentos de nivel carrito, pero
+    // si el precio de oferta de las primeras unidades del limite.
+    const unselected = panel.total === 0 || panel.total == null;
     for (const row of withBase) {
-      const lineBase = row.baseUnit * row.qty;
-      const net = lineBase - discounts * (lineBase / denom);
+      let lineBase = row.baseUnit * row.qty;
+      if (unselected && row.shown != null && row.limit > 0) {
+        const promoQty = Math.min(row.qty, row.limit);
+        lineBase = row.shown * promoQty + row.baseUnit * (row.qty - promoQty);
+      }
+      const net = unselected ? lineBase : lineBase - discounts * (lineBase / denom);
       allocation.push({ row, lineBase, net: Math.round(net * 100) / 100, avgUnit: 0 });
     }
 
-    // Cuadre exacto al centavo con el total de Temu.
-    if (allocation.length) {
+    // Cuadre exacto al centavo con el total de Temu. Solo cuando hay un total
+    // valido: con el carrito sin seleccion Temu muestra $0,00 y repartir esa
+    // diferencia dejaria todas las filas en cero.
+    if (allocation.length && panel.total != null && panel.total > 0) {
       const cents = allocation.map((a) => Math.round(a.net * 100));
       const diff = Math.round(total * 100) - cents.reduce((x, y) => x + y, 0);
       if (diff !== 0) {
