@@ -50,10 +50,23 @@ total exacto de Temu.
 
 ## Instalacion
 
+Descarga la ultima version desde
+https://github.com/MapleProjects/temu-cart-insight/releases/latest
+y descomprime el ZIP.
+
 1. Abrir `chrome://extensions` (o `vivaldi://extensions`).
 2. Activar "Modo de desarrollador".
-3. "Cargar descomprimida" y elegir esta carpeta.
+3. "Cargar descomprimida" y elegir la carpeta descomprimida.
 4. Recargar la pestana de Temu.
+
+Para desarrollar: cargar esta misma carpeta del repositorio y usar
+`./scripts/package.sh` para generar el ZIP de cada version.
+
+## Publicar una version
+
+1. Subir el numero en `manifest.json`.
+2. `./scripts/package.sh`
+3. `gh release create v<version> dist/temu-cart-insight-<version>.zip --notes-file <notas> --latest`
 
 ## Estructura
 
