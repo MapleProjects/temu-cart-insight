@@ -157,7 +157,10 @@
     // pintamos nosotros, y se guardan para no volver a depender del DOM
     // repintado. Si cambia la cantidad se vuelve a leer.
     const prev = state.prices.get(goodsId);
-    if (!prev || prev.qty !== out.qty) {
+    const painted = row.querySelector('[data-temu-ci-price="1"]');
+    // Si Temu repinto la fila (recarga, cambio de cantidad) nuestro nodo
+    // desaparece y hay que volver a leer los precios originales.
+    if (!prev || prev.qty !== out.qty || !painted) {
       const clean = rowTextClean(row);
       const baseMatch = clean.match(/promociones a\s*\$?\s*([\d.,]+)/i);
       const shownMatch = clean.match(/([\d.,]+)\s*\$?\s*tras aplicar/i) || clean.match(/\$\s*([\d.,]+)\s*tras aplicar/i);
@@ -180,6 +183,9 @@
     }
 
     // Nodo del precio mostrado: se pinta encima, sin tocar la linea de promos.
+    // Si Temu repinto la fila el nodo anterior queda suelto: se vuelve a buscar.
+    const cachedSlot = state.priceSlot.get(goodsId);
+    if (cachedSlot && !document.contains(cachedSlot)) state.priceSlot.delete(goodsId);
     if (!state.priceSlot.get(goodsId)) {
       const promo = findPromoLine(row);
       const before = promo && promo.previousElementSibling;
@@ -366,8 +372,21 @@
 
   function paintPrice(entry) {
     const { row } = entry;
-    const slot = state.priceSlot.get(row.goodsId);
-    if (!slot || !document.contains(slot)) return;
+    let slot = state.priceSlot.get(row.goodsId);
+    if (!slot || !document.contains(slot)) {
+      state.priceSlot.delete(row.goodsId);
+      const promo = findPromoLine(row.rowEl);
+      const before = promo && promo.previousElementSibling;
+      if (before && norm(before.textContent).length < 30) state.priceSlot.set(row.goodsId, before);
+      else {
+        const orange = [...row.rowEl.querySelectorAll('span,div,b,strong')].filter(
+          (el) => !el.children.length && getComputedStyle(el).color === ORANGE
+        );
+        if (orange.length) state.priceSlot.set(row.goodsId, orange[0].parentElement || orange[0]);
+      }
+      slot = state.priceSlot.get(row.goodsId);
+    }
+    if (!slot) return;
 
     const cents = unitCents(entry);
     const uniform = cents.every((c) => c === cents[0]);
