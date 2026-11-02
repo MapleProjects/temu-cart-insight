@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Temu Cart Insight",
+  "version": "1.0.0",
+  "description": "Precio unitario real y total neto por fila en el carrito de Temu, con desglose de unidades fuera de limite promocional.",
+  "minimum_chrome_version": "111",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "host_permissions": [
+    "https://www.temu.com/*",
+    "https://*.temu.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.temu.com/*"],
+      "js": ["src/hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.temu.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
+}
