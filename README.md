@@ -8,14 +8,16 @@ ruido de descuentos del panel y de las paginas de listado.
 
 Carrito:
 
-- Reemplaza el precio naranja de cada fila por el precio real por unidad
-  (neto de la fila dividido entre las unidades) y muestra el total de la fila.
+- Reemplaza el precio de cada fila por el desglose por unidad, de izquierda a
+  derecha: `$6,37 + $9,47 + $9,48` y debajo `total: $25,32`. Cuando todas las
+  unidades valen lo mismo muestra `$7,68 × 3`.
+- La primera tanda de unidades va al precio de oferta que muestra Temu y el
+  resto al promedio que queda tras prorratear los descuentos del panel.
 - Oculta el precio tachado, el badge de porcentaje y la linea
   "tras aplicar promociones a" que Temu usa para marear.
 - Deja en el panel solo el descuento por tiempo limitado, el cupon y el total.
 - Anade una linea con el precio real promedio por unidad del pedido.
-- Los descuentos del panel se prorratean por importe base de cada fila y el
-  resultado se cuadra al centavo con el total de Temu.
+- La suma de los netos de cada fila cuadra al centavo con el total de Temu.
 
 Inicio, busqueda y ficha de producto:
 

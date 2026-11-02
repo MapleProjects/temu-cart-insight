@@ -340,23 +340,31 @@
 
     slot.textContent = '';
     slot.style.textDecoration = 'none';
-    slot.style.display = 'flex';
-    slot.style.flexDirection = 'column';
-    slot.style.alignItems = 'flex-start';
+    // El contenedor de Temu recorta a una linea: se libera para el total.
+    slot.style.overflow = 'visible';
+    slot.style.height = 'auto';
+    slot.style.maxHeight = 'none';
+
+    const box = document.createElement('div');
+    box.style.cssText =
+      'display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:100%;text-decoration:none';
 
     const units = document.createElement('div');
     units.textContent = unitsText;
     units.style.cssText =
-      'color:#fb7701;font-weight:700;font-size:12px;line-height:1.35;text-decoration:none;' +
+      'display:block;color:#fb7701;font-weight:700;font-size:15px;line-height:1.4;text-decoration:none;' +
       'white-space:normal;word-break:break-word;max-width:100%';
+    box.append(units);
 
-    slot.append(units);
     if (row.qty > 1) {
       const total = document.createElement('div');
-      total.textContent = `total ${money(entry.net)}`;
-      total.style.cssText = 'color:#555;font-size:11px;line-height:1.2;margin-top:1px;text-decoration:none';
-      slot.append(total);
+      total.textContent = `total: ${money(entry.net)}`;
+      total.style.cssText =
+        'display:block;color:#111;font-size:15px;font-weight:700;line-height:1.4;text-decoration:none';
+      box.append(total);
     }
+
+    slot.append(box);
     slot.setAttribute('data-temu-ci-sig', signature);
     slot.setAttribute('data-temu-ci-price', '1');
   }
@@ -380,7 +388,7 @@
         const text = norm(el.textContent);
         if (!text || text.length > 24) continue;
         if (getComputedStyle(el).textDecorationLine.includes('line-through') && priceLike(text)) hideNode(el);
-        else if (/^-\d{1,2}%\b/.test(text)) hideNode(el);
+        else if (/^-\d{1,2}%/.test(text)) hideNode(el);
       }
 
       // Linea "precio base sin promos $X"
@@ -448,7 +456,7 @@
       if (el.children.length > 2) continue;
       const text = norm(el.textContent);
       if (!text || text.length > 34) continue;
-      if (/^-\d{1,2}%\b/.test(text)) {
+      if (/^-\d{1,2}%/.test(text)) {
         hideNode(el);
         continue;
       }
