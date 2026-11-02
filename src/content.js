@@ -583,15 +583,23 @@
 
       const blocks = [...root.querySelectorAll('div')].filter((el) => {
         const t = norm(el.textContent);
-        return /^est\.?\s*\$/i.test(t) && t.length < 220 && el.children.length <= 3;
+        if (!/^est\.?\s*\$/i.test(t)) return false;
+        if (t.length > 260) return false;
+        if (/(agrega|comprar|talla|color|cant\.)/i.test(t)) return false;
+        return true;
       });
       if (!blocks.length) continue;
       const block = blocks.reduce((a, b) => (b.textContent.length > a.textContent.length ? b : a));
 
-      const titleEl = [...root.querySelectorAll('div')].find((el) => {
+      const titles = [...root.querySelectorAll('div,h1,h2')].filter((el) => {
+        if (el.querySelector('script,style')) return false;
         const t = norm(el.textContent);
-        return t.length > 25 && !/\$/.test(t) && el.children.length <= 1;
+        if (t.length < 30 || t.length > 300) return false;
+        if (/\$/.test(t)) return false;
+        if (/vendido por|ventas|de este vendedor/i.test(t)) return false;
+        return el.children.length <= 2;
       });
+      const titleEl = titles.reduce((a, b) => (!a || b.textContent.length > a.textContent.length ? b : a), null);
       if (!titleEl) continue;
 
       const entry = matchCandidate(root, titleEl.textContent);

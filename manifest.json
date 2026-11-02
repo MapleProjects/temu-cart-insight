@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Temu Cart Insight",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Precio unitario real y total neto por fila en el carrito de Temu, con desglose de unidades fuera de limite promocional.",
   "minimum_chrome_version": "111",
   "icons": {
