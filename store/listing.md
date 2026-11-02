@@ -63,7 +63,14 @@ Necesita acceso a esa pagina para leer los precios y cantidades que muestra
 Temu, calcular el neto por fila, reemplazar el texto del precio y ocultar los
 elementos de descuento redundantes. No se inyecta en ningun otro sitio.
 
-No se solicitan permisos de storage, tabs, cookies ni scripting.
+Permiso storage
+
+Se usa unicamente para guardar en el navegador el ultimo carrito calculado
+(producto, cantidad y precio real) y corregir el minicarrito lateral y la vista
+rapida cuando el usuario navega por otras paginas de Temu. El dato no sale del
+equipo y se limita a seis horas.
+
+No se solicitan permisos de tabs, cookies ni scripting.
 
 ## Declaracion de codigo remoto
 

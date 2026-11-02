@@ -23,6 +23,9 @@ Inicio, busqueda y ficha de producto:
 
 - Oculta precios tachados, badges "-NN%" y textos de "Precio original",
   "Ahorra ..." y "descuento aplicado". El precio final queda intacto.
+- En el minicarrito lateral y en la vista rapida de producto, si el articulo
+  esta en el carrito, muestra el precio real por unidad y el total de la fila en
+  lugar del precio estimado de Temu.
 
 ## Fuentes de datos
 

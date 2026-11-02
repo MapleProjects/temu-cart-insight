@@ -470,6 +470,195 @@
     }
   }
 
+  // Vista rapida del producto: Temu muestra "Est. $X" por unidad, que no
+  // coincide con lo que cobra el carrito. Si el producto esta en el carrito se
+  // sustituye por el precio real y su total.
+  // El nombre de la fila trae distintivos pegados ("CASI AGOTADO(S) ..."), que
+  // el titulo del modal no tiene: se limpian antes de comparar.
+  function cleanName(text) {
+    return norm(text)
+      .replace(/^imagen del art[ií]culo\s*/i, '')
+      .replace(/^(casi agotado(\(s\))?|agotado|nuevo|choice|mega oferta|black friday)\s*/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  const SNAPSHOT_KEY = 'temuCartInsightSnapshot';
+  state.snapshot = [];
+
+  // Guarda el ultimo carrito calculado para poder corregir los paneles de
+  // producto en otras paginas (portada, busqueda, ficha).
+  function persistSnapshot(result) {
+    try {
+      const rows = result.allocation.map((a) => ({
+        goodsId: String(a.row.goodsId || ''),
+        name: a.row.name,
+        qty: a.row.qty,
+        net: a.net,
+        units: unitCents(a),
+      }));
+      const sig = JSON.stringify(rows.map((r) => [r.goodsId, r.qty, r.net]));
+      if (state.snapSig === sig) return;
+      state.snapSig = sig;
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ [SNAPSHOT_KEY]: { ts: Date.now(), rows } });
+      }
+      state.snapshot = rows;
+    } catch (err) {
+      /* sin contexto de extension (pruebas por inyeccion manual) */
+    }
+  }
+
+  function loadSnapshot() {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+      chrome.storage.local.get(SNAPSHOT_KEY, (data) => {
+        const snap = data && data[SNAPSHOT_KEY];
+        if (snap && Array.isArray(snap.rows) && Date.now() - snap.ts < 6 * 60 * 60 * 1000) {
+          state.snapshot = snap.rows;
+          schedule();
+        }
+      });
+    } catch (err) {
+      /* idem */
+    }
+  }
+
+  // Filas del carrito disponibles: las vivas si estamos en el carrito, o las
+  // guardadas si estamos en otra pagina.
+  function candidates() {
+    const live = state.last && state.last.allocation;
+    if (live && live.length) {
+      return live.map((a) => ({
+        goodsId: String(a.row.goodsId || ''),
+        name: a.row.name,
+        qty: a.row.qty,
+        net: a.net,
+        units: unitCents(a),
+      }));
+    }
+    return state.snapshot || [];
+  }
+
+  function matchCandidate(root, titleText) {
+    const list = candidates();
+    if (!list.length) return null;
+
+    const hrefs = [...root.querySelectorAll('a[href*="goods_id="]')].map((a) => a.getAttribute('href') || '');
+    for (const href of hrefs) {
+      const m = href.match(/goods_id=(\d+)/);
+      if (!m) continue;
+      const hit = list.find((c) => c.goodsId === m[1]);
+      if (hit) return hit;
+    }
+
+    const target = cleanName(titleText);
+    if (target.length < 12) return null;
+    return (
+      list.find((c) => {
+        const name = cleanName(c.name);
+        if (name.length < 12) return false;
+        const key = target.slice(0, 20);
+        const own = name.slice(0, 20);
+        return own === key || name.startsWith(key) || target.startsWith(own);
+      }) || null
+    );
+  }
+
+  function cleanQuickView() {
+    const roots = new Set([...document.querySelectorAll('[role="dialog"]')]);
+    for (const el of document.querySelectorAll('div')) {
+      const cs = getComputedStyle(el);
+      if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
+      if (cs.zIndex === 'auto') continue;
+      const w = el.offsetWidth;
+      if (w < 200 || w > 760 || el.offsetHeight < 120) continue;
+      roots.add(el);
+    }
+
+    for (const root of roots) {
+      if (root.getBoundingClientRect().width < 200) continue;
+      if (root.querySelector('[data-temu-ci-qv]')) continue;
+
+      const blocks = [...root.querySelectorAll('div')].filter((el) => {
+        const t = norm(el.textContent);
+        return /^est\.?\s*\$/i.test(t) && t.length < 220 && el.children.length <= 3;
+      });
+      if (!blocks.length) continue;
+      const block = blocks.reduce((a, b) => (b.textContent.length > a.textContent.length ? b : a));
+
+      const titleEl = [...root.querySelectorAll('div')].find((el) => {
+        const t = norm(el.textContent);
+        return t.length > 25 && !/\$/.test(t) && el.children.length <= 1;
+      });
+      if (!titleEl) continue;
+
+      const entry = matchCandidate(root, titleEl.textContent);
+      if (!entry) continue;
+
+      const cents = entry.units || [];
+      const uniform = cents.length > 0 && cents.every((c) => c === cents[0]);
+      const unitsText = !cents.length
+        ? money(entry.net)
+        : uniform
+        ? `${money(cents[0] / 100)}${entry.qty > 1 ? ` × ${entry.qty}` : ''}`
+        : cents.map((c) => money(c / 100)).join(' + ');
+
+      block.textContent = '';
+      block.setAttribute('data-temu-ci-qv', '1');
+      block.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-decoration:none';
+
+      const head = document.createElement('div');
+      head.textContent = unitsText;
+      head.style.cssText = 'color:#fb7701;font-weight:700;font-size:15px;line-height:1.35;text-decoration:none';
+      block.append(head);
+
+      if (entry.qty > 1) {
+        const tot = document.createElement('div');
+        tot.textContent = `total: ${money(entry.net)}`;
+        tot.style.cssText = 'color:#111;font-size:15px;font-weight:700;line-height:1.35;text-decoration:none';
+        block.append(tot);
+      }
+
+      const note = document.createElement('div');
+      note.textContent = 'precio real en tu carrito';
+      note.style.cssText = 'color:#777;font-size:11px;line-height:1.3;text-decoration:none';
+      block.append(note);
+    }
+  }
+
+  // Minicarrito lateral que Temu muestra en todas las paginas: repite el precio
+  // por unidad como si fuera el precio real. Se corrige con el ultimo carrito
+  // conocido.
+  function cleanMiniCart() {
+    for (const row of document.querySelectorAll('div._3nm8E1o6')) {
+      const price = row.querySelector('div.QYQCxZyT');
+      if (!price || price.getAttribute('data-temu-ci-mini') === '1') continue;
+      const media = row.querySelector('[aria-label*="imagen del"]');
+      const title = media ? media.getAttribute('aria-label') || '' : '';
+      const entry = matchCandidate(row, title);
+      if (!entry) continue;
+
+      const avg = entry.qty > 1 ? entry.net / entry.qty : entry.net;
+      price.textContent = '';
+      price.setAttribute('data-temu-ci-mini', '1');
+      price.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:1px;text-decoration:none';
+
+      const top = document.createElement('div');
+      top.textContent = entry.qty > 1 ? `${money(avg)} × ${entry.qty}` : money(entry.net);
+      top.style.cssText = 'color:#fb7701;font-weight:700;font-size:13px;line-height:1.3;text-decoration:none';
+      price.append(top);
+
+      if (entry.qty > 1) {
+        const tot = document.createElement('div');
+        tot.textContent = `total: ${money(entry.net)}`;
+        tot.style.cssText = 'color:#111;font-size:11px;font-weight:600;line-height:1.3;text-decoration:none';
+        price.append(tot);
+      }
+    }
+  }
+
   // ------------------------------------------------------------ ciclo
   function run() {
     state.timer = null;
@@ -478,11 +667,16 @@
       state.last = result;
       if (!result.allocation.length) {
         cleanListPage();
+        cleanMiniCart();
+        cleanQuickView();
         return;
       }
       for (const entry of result.allocation) paintPrice(entry);
       cleanNoise(result.allocation);
       paintSummary(result);
+      persistSnapshot(result);
+      cleanMiniCart();
+      cleanQuickView();
     } catch (err) {
       console.error('[Temu Cart Insight]', err);
     }
@@ -507,6 +701,7 @@
     document.addEventListener('input', schedule, true);
     document.addEventListener('change', schedule, true);
     document.addEventListener('click', schedule, true);
+    loadSnapshot();
     schedule();
     setInterval(schedule, 2500);
   };
@@ -515,5 +710,13 @@
   else document.addEventListener('DOMContentLoaded', start, { once: true });
 
   // Punto de inspeccion para depurar el calculo desde la consola.
-  window.__temuCi = { state, compute, parsePanel };
+  window.__temuCi = {
+    state,
+    compute,
+    parsePanel,
+    setSnapshot: (rows) => {
+      state.snapshot = rows;
+      schedule();
+    },
+  };
 })();
